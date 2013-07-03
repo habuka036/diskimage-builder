@@ -1,3 +1,14 @@
 busybox
-tgtd
-tgtadm
+parted
+rsync
+ntpdate
+hwclock
+mkfs.ext2
+mkfs.ext3
+mkfs.ext4
+sfdisk
+curl
+iscsid
+iscsiadm
+lsof
+smartctl

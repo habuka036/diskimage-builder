@@ -1,8 +1,9 @@
 #!/bin/bash
-
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # XXX: Only portions of this are the NTT original, much is now HP work
-
+#
 # Copyright (c) 2012 NTT DOCOMO, INC. 
+# Copyright 2013 National Institute of Informatics.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -32,10 +33,11 @@ function show_options () {
   echo "     -h -- This help"
   echo "     -o FILENAME -- Output file"
   echo "     -x -- turn on tracing"
+  echo "     -d -- dodai-compute image create"
   exit 0
 }
 
-TEMP=$(getopt -o m:k:ho:x -n $SCRIPTNAME -- "$@")
+TEMP=$(getopt -o m:k:ho:xd -n $SCRIPTNAME -- "$@")
 if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 
 # Note the quotes around `$TEMP': they are essential!
@@ -48,6 +50,7 @@ while true ; do
         -o) export IMAGE_NAME=$2; shift 2 ;;
         -h) show_options;;
         -x) shift; set -x;;
+        -d) shift; DODAI=true;;
         --) shift ; break ;;
         *) echo "Internal error!" ; exit 1 ;;
     esac
@@ -63,10 +66,19 @@ RAMDISK_ELEMENT=$($SCRIPT_HOME/element-info --expand-dependencies $RAMDISK_ELEME
 echo "Building element(s): ${RAMDISK_ELEMENT}"
 
 echo "Discovering binary dependencies"
+if [ $DODAI ]; then
+    if [ "`which apt-get`" != "" ]; then
+        sudo apt-get install -y smartmontools
+    elif [ "`which yum`" != ""  ]; then
+        yum install -y smartmontools
+    fi
+fi
 ensure_binaries
 
 INIT="$_DIR/../scripts/init"
 FUNCTIONS_D="$_DIR/../scripts/d"
+AMI_DEPLOY="$_DIR/../scripts/ami-deploy.sh"
+DISK_CLEAN="$_DIR/../scripts/disk-clean.sh"
 
 MODULE_DIR=$MODULE_ROOT/lib/modules/$KERNEL_VERSION
 FIRMWARE_DIR=$MODULE_ROOT/lib/firmware
@@ -83,12 +95,21 @@ if [ ! -d "$LIB_UDEV" ]; then
 	exit 1
 fi
 
+if [ "`which apt-get`" != "" ]; then
+    sudo apt-get install -y busybox
+elif [ "`which yum`" != ""  ]; then
+    yum install -y busybox
+fi
+
 mk_build_dir
 mkdir -p $TMP_BUILD_DIR/mnt
 TMP_MOUNT_PATH=$TMP_BUILD_DIR/mnt
 
 echo "working in $TMP_MOUNT_PATH"
 
+if [ $DODAI ]; then
+    dodai_files
+fi
 create_base
 populate_lib
 populate_busybox
@@ -96,4 +117,3 @@ populate_init
 populate_udev
 finalise_image
 save_image $IMAGE_NAME
-

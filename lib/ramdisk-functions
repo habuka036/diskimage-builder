@@ -1,5 +1,6 @@
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 NTT DOCOMO, INC.
+# Copyright 2013 National Institute of Informatics.
 #
 # All Rights Reserved.
 #
@@ -90,6 +91,16 @@ udev_log="no"
 EOF
 }
 
+function dodai_files() {
+  echo "Installing dodai-compute files"
+  mkdir -p "$TMP_MOUNT_PATH/usr/bin"
+  mkdir -p "$TMP_MOUNT_PATH/etc/scripts"
+
+  sudo cp -a "/usr/bin/env" "$TMP_MOUNT_PATH/usr/bin"
+  cp -a "$AMI_DEPLOY" "$TMP_MOUNT_PATH/etc/scripts"
+  cp -a "$DISK_CLEAN" "$TMP_MOUNT_PATH/etc/scripts"
+}
+
 function copy_required_libs() {
   ldd_out=`ldd "$1"`
   if [ $? -ne 0 ]; then
@@ -145,12 +156,15 @@ function populate_lib () {
       echo "$i is not found in PATH" 2>&1
       exit 1
     fi
+
     cp -L "$path" "$TMP_MOUNT_PATH/bin/"
+    echo "$path"
     copy_required_libs "$path"
   done
 
   cp -a "$MODULE_DIR" "$TMP_MOUNT_PATH/lib/modules/$KERNEL_VERSION"
   cp -a "$FIRMWARE_DIR" "$TMP_MOUNT_PATH/lib/firmware"
+
 }
 
 function populate_busybox () {
@@ -173,6 +187,8 @@ function populate_init () {
     cp "$F" "$TMP_MOUNT_PATH"
   done
 
+  # dodai-compute not append element 
+  if [ ! $DODAI ]; then
   # Append /init with any element fragments that are present
   for _FLVR in ${RAMDISK_ELEMENT} ; do
     for dir in $(echo $ELEMENTS_PATH | tr ":" " ") ; do
@@ -187,10 +203,11 @@ EOF
       break
     done
   done
-
   # Add our final steps to /init
   cat <${INIT}-end >>$TMP_MOUNT_PATH/init
+  fi
 }
+
 
 function finalise_image () {
   echo "Finalising image"
@@ -211,5 +228,3 @@ function populate_udev () {
     done
   done
 }
-
-
