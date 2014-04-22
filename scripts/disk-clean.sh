@@ -137,11 +137,9 @@ function create_json {
   fi
   echo "uninstall OS:$name version:$version"
 
-  rsync_cmd=$(echo "$ami_path" | cut -d':' -f 1-2)":$agent_bind_subport/scripts/linux/$name/$version"
-  $RSYNC -HSa $rsync_cmd/usr /mnt/sda2/ |& logging
-  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_cmd/usr /mnt/sda2/" || return 1
-  $RSYNC -HSa $rsync_cmd/mnt/ /mnt/ |& logging
-  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_cmd/mnt/ /mnt/" || return 1
+  rsync_uri="$injection_scripts_path/linux/$name/$version/"
+  $RSYNC -HSa $rsync_uri/mnt/ /mnt/ |& logging
+  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_uri/mnt/ /mnt/" || return 1
 
   cd  /mnt/.dodai/
   source .bashrc

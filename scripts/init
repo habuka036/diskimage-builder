@@ -86,7 +86,13 @@ if [ -n "$prov_mac_address" -a -n "$prov_ip_address" -a -n "$prov_subnet" ]; the
     ifconfig "$nic" up
     ip addr add $prov_ip_address/$prov_subnet dev $nic
 
+    if [ -n "$injection_script_path" ]; then
+        rsync_ip=$(echo "$injection_script_path" | cut -d'/' -f 3)
+    elif [ -n "$deletion_scripts_path" ]; then
+        rsync_ip=$(echo "$deletion_scripts_path" | cut -d'/' -f 3)
+    else
     rsync_ip=$(echo "$ami_path" | cut -d'/' -f 3)
+    fi
     rsync_ip=$(echo "$rsync_ip" | cut -d':' -f 1)
     w=10
 
@@ -109,17 +115,19 @@ else
 fi
 
 if [ $action == "delete" ]; then
-    rcync_cmd=$(echo "$ami_path" | cut -d'/' -f 1-3)
-    rsync -HSa $rcync_cmd/$deletion_scripts_path /etc/scripts/
-    if [ -e /etc/scripts/deletion-scripts ]; then
-        echo "deletion-scripts start"
-        bash /etc/scripts/deletion-scripts
+    rsync -HSa $deletion_scripts_path /etc/scripts/deletion-script
+    if [ -e /etc/scripts/deletion-script ]; then
+        echo "deletion-script start"
+        chmod +x /etc/scripts/deletion-script
+        /etc/scripts/deletion-script
     else
         echo "disk-clean start"
         bash /etc/scripts/disk-clean.sh
     fi
     echo "delete complete"
 else
+    rsync -HSa $injection_scripts_path/ami-deploy.sh /etc/scripts/ami-deploy.sh
+    chmod +x /etc/scripts/ami-deploy.sh
     echo "deploy start"
     bash /etc/scripts/ami-deploy.sh
     echo "deploy complete"

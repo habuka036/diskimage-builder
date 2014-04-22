@@ -40,6 +40,30 @@ PING=`which ping`
 logfile="/etc/dodai-compute-os-duper.log"
 logterm="/dev/tty2"
 
+appended_kernel_behavior='
+initrd
+selinux
+disk
+root_size
+swap_size
+ephemeral_size
+kdump_size
+ami_path
+prov_ip_address
+prov_mac_address
+host_name
+root_fs_type
+agent_bind_port
+agent_config
+prov_subnet
+action
+injection_scripts_path
+deletion_scripts_path
+BOOT_IMAGE
+ip
+BOOTIF
+'
+
 function logging {
   RETVAL=$?
   [[ -n "$1" ]] && \
@@ -145,8 +169,8 @@ function partition_and_format {
 
   for i in `seq 5`
   do
-    $PARTED /dev/sda $RM $i |& logging
-    err_check "$?" "$FUNCNAME" "$PARTED /dev/sda $RM $i" || return 1
+    $PARTED /dev/sda rm $i |& logging
+    err_check "$?" "$FUNCNAME" "$PARTED /dev/sda rm $i" || return 1
   done
 
   total_size_mb=`$PARTED /dev/sda -s unit MB print | $GREP Disk | $CUT -f3 -d " " | $CUT -f1 -d "M"`
@@ -197,68 +221,10 @@ function fs_type_check {
   esac
 }
 
-function copy_fs {
-  image_dev=sda4
-
-  $MKDIR /mnt/$image_dev
-  err_check "$?" "$FUNCNAME" "$MKDIR /mnt/$image_dev" || return 1
-  $MOUNT /dev/$image_dev /mnt/$image_dev |& logging
-  err_check "$?" "$FUNCNAME" "$MOUNT /dev/$image_dev /mnt/$image_dev" || return 1
-
-  $WGET -O /mnt/$image_dev/image http://$cobbler/cobbler/images/$image_id |& logging
-  err_check "$?" "$FUNCNAME" "$WGET -O /mnt/$image_dev/image http://$cobbler/cobbler/images/$image_id" || return 1
-  $MKDIR /mnt/image
-  err_check "$?" "$FUNCNAME" "$MKDIR /mnt/image" || return 1
-  $MOUNT -o loop -t ext4 /mnt/$image_dev/image /mnt/image |& logging
-  err_check "$?" "$FUNCNAME" "$MOUNT -o loop /mnt/$image_dev/image /mnt/image" || return 1
-
-  fs_type=`file /mnt/$image_dev/image`
-  MKFS=`fs_type_check "$fs_type"`
-
-  $MKFS /dev/sda1 |& logging
-  err_check "$?" "$FUNCNAME" "$MKFS /dev/sda1" || return 1
-  $MKFS /dev/sda2 |& logging
-  err_check "$?" "$FUNCNAME" "$MKFS /dev/sda2" || return 1
-
-  $MKDIR /mnt/sda2 |& logging
-  err_check "$?" "$FUNCNAME" "$MKDIR /mnt/sda2" || return 1
-  $MOUNT /dev/sda2 /mnt/sda2 |& logging
-  err_check "$?" "$FUNCNAME" "$MOUNT /dev/sda2 /mnt/sda2" || return 1
-
-  $RSYNC -PavHS /mnt/image/ /mnt/sda2 |& logging
-  err_check "$?" "$FUNCNAME" "$RSYNC -PavHS /mnt/image/ /mnt/sda2" || return 1
-
-  fs_type=`$GREP '/mnt' /mnt/sda2/etc/fstab`
-  MKFS=`fs_type_check "$fs_type"`
-
-  $MKFS /dev/sda5 |& logging
-  err_check "$?" "$FUNCNAME" "$MKFS /dev/sda5" || return 1
-
-  $UMOUNT /mnt/image |& logging
-  err_check "$?" "$FUNCNAME" "$UMOUNT /mnt/image" || return 1
-  $RM -rf /mnt/$image_dev/image
-  err_check "$?" "$FUNCNAME" "$RM -rf /mnt/$image_dev/image" || return 1
-  $UMOUNT /mnt/$image_dev |& logging
-  err_check "$?" "$FUNCNAME" "$UMOUNT /mnt/$image_dev" || return 1
-}
-
 function set_hostname {
   echo "$host_name" > /mnt/sda2/etc/hostname
   $SED -i -e "s/HOST/$host_name/" /mnt/sda2/etc/hosts |& logging
   err_check "$?" "$FUNCNAME" "$SED -i -e 's/HOST/$host_name/'" || return 1
-}
-
-function create_files {
-  $MKDIR /mnt/sda2/etc/dodai
-
-  echo $prov_ip_address > /mnt/sda2/etc/dodai/pxe_ip
-  echo $prov_mac_address > /mnt/sda2/etc/dodai/pxe_mac
-  echo $storage_ip > /mnt/sda2/etc/dodai/storage_ip
-  echo $storage_mac > /mnt/sda2/etc/dodai/storage_mac
-
-  $CHMOD +x /mnt/sda2/usr/local/src/dodai-deploy/others/auto_register_node/setup.sh |& logging
-  err_check "$?" "$FUNCNAME" "$CHMOD +x /mnt/sda2/usr/local/src/dodai-deploy/others/auto_register_node/setup.sh" || return 1
-  /mnt/sda2/usr/local/src/dodai-deploy/others/auto_register_node/setup.sh /mnt/sda2 $image_type |& logging
 }
 
 function grub_install {
@@ -269,9 +235,26 @@ function grub_install {
   echo I | $CHROOT /mnt/sda2 $PARTED /dev/sda set 1 bios_grub on |& logging
   err_check "$?" "$FUNCNAME" "echo I | $CHROOT /mnt/sda2 $PARTED /dev/sda set 1 bios_grub on" || return 1
   $CHROOT /mnt/sda2 grub-install /dev/sda 
+  kernel_parameter=`cat /proc/cmdline`
+  for akb in $appended_kernel_behavior; do
+    kernel_parameter=`echo $kernel_parameter | sed -e "s/$akb=\S*//"`
+  done
+  if [[ 0 -ne `echo $kernel_parameter | wc -w` ]]; then
+    echo $kernel_parameter > "/mnt/sda2${agent_config}/kernel_append_params"
+    if [[ -e '/mnt/sda2/etc/default/grub' ]]; then
+      sed -i -e "s|^\(GRUB_CMDLINE_LINUX_DEFAULT=\".*\)\"$|\1 $kernel_parameter\"|" /mnt/sda2/etc/default/grub
+      $CHROOT /mnt/sda2 update-grub
+    elif [[ -e '/mnt/sda2/boot/grub/grub.conf' ]]; then
+      sed -i -e "s|^\(\s*kernel .*$\)|\1 $kernel_parameter|g" /mnt/sda2/boot/grub/grub.conf
+    elif [[ -e '/mnt/sda2/boot/grub/grub.conf' ]]; then
+      sed -i -e "s|^\(\s*kernel .*$\)|\1 $kernel_parameter|g" /mnt/sda2/boot/grub/menu.lst
+    fi
+  fi
+  sync
 }
 
 function setup_network {
+  prov_mac_address=`echo $prov_mac_address | tr [A-Z] [a-z]`
   add_a_nic "eth0" $prov_ip_address "$prov_subnet"
   MATCHADDR="$prov_mac_address" INTERFACE="eth0" MATCHDEVID="0x0" MATCHIFTYPE="1"  $CHROOT /mnt/sda2 /lib/udev/write_net_rules |& logging
   err_check "$?" "$FUNCNAME" "/lib/udev/write_net_rules" || return 1
@@ -279,7 +262,7 @@ function setup_network {
   add_interface=1
   for mac_address in `ifconfig -a | grep -i HWAddr | awk '{print $5}' | tr [A-Z] [a-z] | sort`
   do
-    if [ $mac_address != $prov_mac_address ]; then
+    if [ "$mac_address" != "$prov_mac_address" ]; then
       MATCHADDR="$mac_address" INTERFACE="eth"$add_interface MATCHDEVID="0x0" MATCHIFTYPE="1"  $CHROOT /mnt/sda2 /lib/udev/write_net_rules |& logging
       err_check "$?" "$FUNCNAME" "eth$add_interface /lib/udev/write_net_rules" || return 1
       add_interface=`expr $add_interface + 1`
@@ -299,41 +282,41 @@ iface $1 inet static
 }
 
 function sync_time {
-  $NTPDATE $cobbler |& logging
-  err_check "$?" "$FUNCNAME" "$NTPDATE $cobbler" || return 1
+  dhcpd_host=$(echo "$ami_path" | cut -d'/' -f3 | cut -d':' -f1)
+  $NTPDATE $dhcpd_host |& logging
+  err_check "$?" "$FUNCNAME" "$NTPDATE $dhcpd_host" || return 1
   $HWCLOCK --systohc |& logging
   err_check "$?" "$FUNCNAME" "$HWCLOCK --systohc" || return 1
 }
 
 function sync_target_machine_time {
-  $CHROOT /mnt/sda2 $NTPDATE $cobbler |& logging
-  err_check "$?" "$FUNCNAME" "$CHROOT /mnt/sda2 $NTPDATE $cobbler" || return
-}
-
-function notify {
-  $CURL http://$cobbler:$monitor_port/$instance_id/$1 |& logging
-  err_check "$?" "$FUNCNAME" "$CURL http://$cobbler:$monitor_port/$instance_id/$1" || return 1
+  dhcpd_host=$(echo "$ami_path" | cut -d'/' -f3 | cut -d':' -f1)
+  $CHROOT /mnt/sda2 $NTPDATE $dhcpd_host |& logging
+  err_check "$?" "$FUNCNAME" "$CHROOT /mnt/sda2 $NTPDATE $dhcpd_host" || return
 }
 
 function rsync {
-  rsync_cmd=$(echo "$ami_path" | cut -d'/' -f 1-3)
-
   MKFS="mkfs."$root_fs_type
   $MKFS /dev/sda2
   $MKDIR /mnt/sda2
 
   $MOUNT -t $root_fs_type /dev/sda2 /mnt/sda2 |& logging
   err_check "$?" "$FUNCNAME" "$MOUNT /dev/sda2 /mnt/sda2 |& logging" || return 1
+  $MKDIR /mnt/sda2/mnt
+  $MOUNT -t $root_fs_type /dev/sda5 /mnt/sda2/mnt |& logging
+  err_check "$?" "$FUNCNAME" "$MOUNT /dev/sda5 /mnt/sda2/mnt |& logging" || return 1
   $RSYNC -HSa $ami_path /mnt/sda2/ |& logging
   err_check "$?" "$FUNCNAME" "$RSYNC -HSa $ami_path /mnt/sda2/" || return 1
 }
 
 function create_json {
-  nic=`ifconfig -a | grep -i ${prov_mac_address} | awk '{print $1}'` |& logging
+  nic=`ifconfig -a | grep -i ${prov_mac_address} | awk '{print $1}'`
   err_check "$?" "$FUNCNAME" "ifconfig -a | grep -i ${prov_mac_address} | awk '{print $1}'" || return 1
-  dodai='{"bind_port":"'$agent_bind_port'","state":"deploying","interfaces":[{"name":"'$nic'","mac_address":"'$prov_mac_address'","ip_addresses":["'$prov_ip_address'"],"subnet":"'$prov_subnet'","role":"system"}]}'
+  dodai='{"bind_port":"'$agent_bind_port'","state":"deploying","interfaces":[{"name":"'$nic'","mac_address":"'$prov_mac_address'","ip_address":"'$prov_ip_address'","netmask":"'$prov_subnet'","role":"system"}]}'
   $MKDIR -p $agent_config
-  echo $dodai > "$agent_config/dodai.json" |& logging
+  $MKDIR -p "/mnt/sda2${agent_config}"
+  echo $dodai > "$agent_config/dodai.json"
+  echo $dodai > "/mnt/sda2${agent_config}/dodai.json"
   err_check "$?" "$FUCNAME" "$CAT $dodai > $agent_config/dodai.json" || return 1
 
   lsb_release="/mnt/sda2/etc/lsb-release"
@@ -363,11 +346,11 @@ function create_json {
   fi
   echo "Install OS:$name version:$version"
 
-  rsync_cmd=$(echo "$ami_path" | cut -d':' -f 1-2)":$agent_bind_subport/scripts/linux/$name/$version"
-  $RSYNC -HSa $rsync_cmd/usr /mnt/sda2/ |& logging
-  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_cmd/usr /mnt/sda2/" || return 1
-  $RSYNC -HSa $rsync_cmd/mnt/ /mnt/ |& logging
-  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_cmd/mnt/ /mnt/" || return 1
+  rsync_uri="$injection_scripts_path/linux/$name/$version/"
+  $RSYNC -HSa $rsync_uri /mnt/sda2/ |& logging
+  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_uri /mnt/sda2/" || return 1
+  $RSYNC -HSa $rsync_uri/mnt/ /mnt/ |& logging
+  err_check "$?" "$FUNCNAME" "$RSYNC -PHSa $rsync_uri/mnt/ /mnt/" || return 1
 
   cd  /mnt/.dodai/
   source .bashrc 
@@ -376,26 +359,27 @@ function create_json {
 }
 
 function file_umount {
+  cp $logfile /mnt/sda2/
   $UMOUNT /mnt/sda2/proc |& logging
   err_check "$?" "$FUNCNAME" "$UMOUNT /mnt/sda2/proc" || return 1
   $UMOUNT /mnt/sda2/dev |& logging
   err_check "$?" "$FUNCNAME" "$UMOUNT /mnt/sda2/dev" || return 1
+  $UMOUNT /mnt/sda2/mnt |& logging
+  err_check "$?" "$FUNCNAME" "$UMOUNT /mnt/sda2/mnt" || return 1
   $UMOUNT /mnt/sda2 |& logging
   err_check "$?" "$FUNCNAME" "$UMOUNT /mnt/sda2" || return 1
 }
 
-#notify "install"
 env_check || except "env_check"
-#sync_time || except "sync_time"
+sync_time || except "sync_time"
 partition_and_format || except "partition_and_format"
 rsync || except "rsync"
 create_json || except "create_json"
-#copy_fs || except "copy_fs"
 set_hostname || except "set_hostname"
-#create_files || except "create_files"
 grub_install || except "grub_install"
 setup_network || except "setup_network"
-#sync_target_machine_time || except "sync_target_machine_time"
+sync_target_machine_time || except "sync_target_machine_time"
+$SED -i -e 's/deploying/deploy complete/' "/mnt/sda2${agent_config}/dodai.json"
 file_umount || except "file_umount"
 
 $SED -i -e 's/deploying/deploy complete/' "$agent_config/dodai.json"

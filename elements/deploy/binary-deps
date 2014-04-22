@@ -6,6 +6,11 @@ hwclock
 mkfs.ext2
 mkfs.ext3
 mkfs.ext4
+mkfs.reiserfs
+mkfs.jfs
+mkfs.xfs
+mkfs.btrfs
+env
 sfdisk
 curl
 iscsid
